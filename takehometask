@@ -1,3 +1,13 @@
+#install.package("jsonlite")
+#install.package("tidyverse")
+#install.package("purrr")
+#install.package("tidyr")
+#install.package("lubridate")
+#install.package("data.table")
+#install.package("mltools")
+#install.package("caret")
+#install.package("pROC")
+
 library(jsonlite)
 library(tidyverse)
 library(purrr)
@@ -135,6 +145,49 @@ y_labels <- data_cate[,c("one_week","two_week","one_mon")]
 data_cate <- data_cate[,-(53:55)]
 data_full <- cbind(data_numer, data_cate)
 
+
+## fast look
+hp_summ <- data_full %>% mutate(hp_cate = if_else(hp > mean(hp),1,0)) %>%
+  group_by(hp_cate) %>% mutate(mean_hp = mean(received_usd_log)) %>% 
+  ungroup() %>% select(hp_cate, mean_hp) 
+hp_summ <- hp_summ[!duplicated(hp_summ$hp_cate),]
+
+
+hp_skill <- data_full %>% mutate(skill_cate = if_else(skill > mean(skill),1,0)) %>%
+  group_by(skill_cate) %>% mutate(mean_skill = mean(received_usd_log)) %>% 
+  ungroup() %>% select(skill_cate, mean_skill) 
+hp_skill <- hp_skill[!duplicated(hp_skill$skill_cate),]
+
+morale_summ <- data_full %>% mutate(morale_cate = if_else(morale > mean(morale),1,0)) %>%
+  group_by(morale_cate) %>% mutate(mean_morale = mean(received_usd_log)) %>% 
+  ungroup() %>% select(morale_cate, mean_morale) 
+morale_summ <- morale_summ[!duplicated(morale_summ$morale_cate),]
+
+speed_summ <- data_full %>% mutate(speed_cate = if_else(speed > mean(speed),1,0)) %>%
+  group_by(speed_cate) %>% mutate(mean_speed = mean(received_usd_log)) %>% 
+  ungroup() %>% select(speed_cate, mean_speed) 
+speed_summ <- speed_summ[!duplicated(speed_summ$speed_cate),]
+
+
+
+hp_summ$Group <- "hp"
+hp_skill$Group <- "skill"
+morale_summ$Group <- "morale"
+speed_summ$speed <- "speed"
+
+colnames(hp_summ) <- c("High_low","Value","Group")
+colnames(hp_skill) <- c("High_low","Value","Group")
+colnames(morale_summ) <- c("High_low","Value","Group")
+colnames(speed_summ) <- c("High_low","Value","Group")
+
+fast_look <- rbind(hp_summ,hp_skill, morale_summ, speed_summ)
+fast_look$High_low <- factor(fast_look$High_low)
+
+
+ggplot(fast_look, aes(Group, Value)) +                                          #1 higher than avg
+  geom_bar(aes(fill = High_low), stat="identity", position="dodge", width=.5)   #0 lower than avg
+
+##
 
 ## One hot coding
 
