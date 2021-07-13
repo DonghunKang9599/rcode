@@ -7,7 +7,7 @@
 #install.package("mltools")
 #install.package("caret")
 #install.package("pROC")
-
+#install.package("ggplot2")
 library(jsonlite)
 library(tidyverse)
 library(purrr)
@@ -17,6 +17,7 @@ library(data.table)
 library(mltools)
 library(caret)
 library(pROC)
+library(ggplot2)
 options(scipen = 200)
 # Data
 
@@ -181,13 +182,14 @@ colnames(morale_summ) <- c("High_low","Value","Group")
 colnames(speed_summ) <- c("High_low","Value","Group")
 
 fast_look <- rbind(hp_summ,hp_skill, morale_summ, speed_summ)
+
+
+fast_look$High_low[fast_look$High_low == 1] <- "Higher"
+fast_look$High_low[fast_look$High_low == 0] <- "Lower"
 fast_look$High_low <- factor(fast_look$High_low)
+ggplot(fast_look, aes(Group, Value)) +
+  geom_bar(aes(fill = High_low), stat="identity", position="dodge", width=.5)
 
-
-ggplot(fast_look, aes(Group, Value)) +                                          #1 higher than avg
-  geom_bar(aes(fill = High_low), stat="identity", position="dodge", width=.5)   #0 lower than avg
-
-##
 
 ## One hot coding
 
@@ -364,3 +366,4 @@ final_out_put <- as.data.frame(final_out_put)
 final_out_put <- final_out_put %>% arrange(ID)
 final_out_put
 #write.csv(final_out_put, file = "C:/Users/DESKTOP/Desktop/takehome/Result.csv")
+
