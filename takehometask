@@ -1,0 +1,313 @@
+library(jsonlite)
+library(tidyverse)
+library(purrr)
+library(tidyr)
+library(lubridate)
+library(data.table)
+library(mltools)
+library(caret)
+library(pROC)
+options(scipen = 200)
+# Data
+
+read_json_lines <- function(file){
+  con <- file(file, open = "r")
+  on.exit(close(con))
+  jsonlite::stream_in(con, verbose = FALSE)
+}
+
+erc20_exchange_rates <- read_json_lines(file = "C:/Users/DESKTOP/Desktop/takehome/erc20_exchange_rates.jsonl")
+item_metadata        <- read_json_lines(file = "C:/Users/DESKTOP/Desktop/takehome/axie_item_metadata_v2.jsonl")
+financial_events     <- read_json_lines(file = "C:/Users/DESKTOP/Desktop/takehome/axie_financial_events_20210115_v2.jsonl")
+
+
+
+
+# Data Cleaning
+
+## Find Date
+
+
+sell_data <- financial_events %>% 
+  filter(event_type == "sell", transaction_subtype == "matched")
+sell_data_chop <- unchop(data = sell_data,  c(items_sent, erc20s))
+sell_data_chop$item_id <-  sell_data_chop$items_sent$item_id
+
+sell_data_chop$listed_date <- NA
+sell_data_chop$sold_data <- NA
+for(i in 1:dim(sell_data_chop)[1]){
+  sell_data_chop$listed_date[i] <-  sell_data_chop[[i,4]][1,2]
+  sell_data_chop$sold_data[i]   <-  sell_data_chop[[i,4]][2,2]
+  
+}
+
+
+## Calculate Interval
+
+
+
+sell_data_chop$time_interval <-  difftime(ymd_hms(sell_data_chop$sold_data), 
+                                          ymd_hms(sell_data_chop$listed_date), 
+                                          units = 'day') %>% as.numeric()
+
+sell_data_chop <- sell_data_chop %>% mutate("one_week" = if_else(time_interval < 7,1,0),
+                                            "two_week" = if_else(time_interval < 14,1,0),
+                                            "one_mon"  = if_else(time_interval < 30,1,0))
+
+
+
+## Remove varibles 
+
+### NA_omit & join data
+
+item_metadata_na_omit <- na.omit(item_metadata)
+joint_data <- inner_join(item_metadata_na_omit,sell_data_chop,"item_id")
+
+joint_data <- joint_data %>% mutate(check_date = if_else(block_timestamp.x <= listed_date,1,0 ))
+joint_data <- joint_data %>% filter(check_date == 1)
+
+joint_data <- cbind(joint_data, joint_data$erc20s) 
+
+
+joint_data <- joint_data[,-c(91,92,87,2,85,3,86,88,89,90,93,94,95,97,98,99,100,101,104,105,106,107,101,112,113,
+                             115,116,117,118,119,96,102,84,103,108)] 
+# Deleted Variables:
+#items_sent, items_received, transactions, block_timestamp.x, block_timestamp.y, 
+#block_date, nft_transaction_hash, entity_id, event_type,data_consistency_status,
+#items_sent_count,items_received_count,
+#item_receive_transfer_type,gas_used_eth,gas_used_usd,superset_id,
+#transaction_type,transaction_subtype,entity_type,item_send_transfer_type,
+#listed_date,sold_data,transaction_subtype,listed_date,sold_data,
+#transaction_subtype,item_id.y,check_date,erc20_contract,sent_amount
+#received_amount,sent_eth,received_eth,sent_usd,erc20s,nft_transfer_type,
+#partition_id,nft_transfer_subtype,time_interval
+
+
+### Check on price data
+
+boxplot(log(joint_data$received_usd)) 
+
+
+
+joint_data$received_usd_log <- log(joint_data$received_usd)
+
+joint_data_f <- joint_data[,-86]  # remove raw price col
+joint_data_f <- joint_data[-which(joint_data$received_usd_log < -10),]
+boxplot(joint_data_f$received_usd_log) 
+
+
+# Modelling(Logistic)
+
+## Data process
+
+
+numer <-c("level", "exp","breedCount", "skill", "morale", "speed", "hp", "all_parts_total_points",
+          "mouth_move_total_points","mouth_move_attack","mouth_move_defense", "mouth_move_accuracy", 
+          "horn_move_total_points", "horn_move_attack", "horn_move_defense", "horn_move_accuracy",
+          "back_move_total_points", "back_move_attack", "back_move_defense", "back_move_accuracy", "tail_move_total_points", 
+          "tail_move_attack","tail_move_defense", "tail_move_accuracy", "total_mystic_parts_count", "total_xmas_parts_count", 
+          "total_bionic_parts_count", "received_usd_log")
+
+
+
+
+cate <- c("fatherClass", "motherClass", "class", "stage", "breedable", "mouth_class", "mouth_name", "is_mouth_mystic",
+          "is_mouth_bionic","is_mouth_xmas","mouth_move_stage", "mouth_move_name", "mouth_move_type", "horn_class", 
+          "horn_name", "is_horn_mystic", "is_horn_bionic", "is_horn_xmas", "horn_move_stage", "horn_move_name", 
+          "horn_move_type", "back_class", "back_name", "is_back_mystic", "is_back_bionic", "is_back_xmas",
+          "back_move_stage", "back_move_name", "back_move_type", "tail_class", "tail_name", "is_tail_mystic", 
+          "is_tail_bionic", "is_tail_xmas", "tail_move_stage", "tail_move_name", "tail_move_type", "eyes_class", 
+          "eyes_name", "is_eyes_mystic", "is_eyes_bionic", "is_eyes_xmas",
+          "ears_class", "ears_name", "is_ears_mystic", "is_ears_bionic", "is_ears_xmas", "pureness", "is_having_mystic_part", 
+          "is_having_xmas_part","is_having_bionic_part", "symbol", "one_week", "two_week", "one_mon")
+
+
+
+
+#joint_data_f[,cate] <- factor(joint_data_f[,cate])
+#joint_data_f[,numer] <- as.numeric(joint_data_f[,numer])
+
+data_numer <- joint_data_f[,numer] %>% mutate_if(is.character,as.numeric) 
+data_cate  <- joint_data_f[,cate] %>% mutate_if(is.character, factor)
+data_cate  <- data_cate %>% mutate_if(is.logical, factor)
+ 
+y_labels <- data_cate[,c("one_week","two_week","one_mon")]
+data_cate <- data_cate[,-(53:55)]
+data_full <- cbind(data_numer, data_cate)
+
+
+## One hot coding
+
+one_hotted_df <- one_hot(as.data.table(data_full))
+
+## Out put variables
+
+
+set.seed(2021)
+for(i in 1:5){
+  assign(paste0("model_one_week_", i), i)
+  assign(paste0("model_two_week_", i), i)
+  assign(paste0("model_one_mon_", i), i)
+  assign(paste0("col_names_",i),i)
+}
+roc_vec_one_week <- vector(length = 5)
+roc_vec_two_week <- vector(length = 5)
+roc_vec_one_mon  <- vector(length = 5) 
+
+
+## Runing model
+
+
+for(i in 1:5){
+  train <- sample(nrow(one_hotted_df), 0.4*nrow(one_hotted_df))
+
+  df.train <- one_hotted_df[train,]
+  df.validate <- one_hotted_df[-train,]
+
+  df.train_scaled <- scale(df.train)
+  df.train_scaled <- df.train_scaled[,colSums(is.na(df.train_scaled)) < nrow(df.train_scaled)]
+  cor_df <-  cor(df.train_scaled)
+  hc  <-  findCorrelation(cor_df, cutoff = 0.3) 
+  hc  <- sort(hc)
+  df.train_scaled <- df.train_scaled[,-c(hc)]
+ 
+
+  y_labels_train  <- y_labels[train,]
+  df.train_scaled <- cbind(y_labels_train, df.train_scaled)
+
+
+  one_week_df_train  <- df.train_scaled[,-c(2,3)]
+  two_week_df_train  <- df.train_scaled[,-c(1,3)]
+  one_month_df_train <- df.train_scaled[,-c(1,2)]
+
+  fit.train_one_week <- glm(one_week ~.,
+                 data = as.data.frame(one_week_df_train), family = binomial(link = 'logit'))
+  fit.train_two_week <- glm(two_week ~.,
+                            data = as.data.frame(two_week_df_train), family = binomial(link = 'logit'))
+  fit.train_one_mon  <- glm(one_mon ~.,
+                            data = as.data.frame(one_month_df_train), family = binomial(link = 'logit'))
+
+
+  assign(paste0("model_one_week_",i), fit.train_one_week)
+  assign(paste0("model_two_week_",i), fit.train_two_week)
+  assign(paste0("model_one_mon_",i), fit.train_one_mon)
+
+  ### test_df
+
+  train_colnames <- colnames(df.train_scaled)
+  assign(paste0("col_names_",i), train_colnames)
+  df.validate    <- df.validate %>% select(train_colnames[-(1:3)])
+  df.validate_scaled <- scale(df.validate)
+
+  y_labels_test  <- y_labels[-train,]
+  df.test_scaled <- cbind(y_labels_test, df.validate_scaled)
+
+
+  one_week_df_test  <- df.test_scaled[,-c(2,3)]
+  two_week_df_test  <- df.test_scaled[,-c(1,3)]
+  one_month_df_test <- df.test_scaled[,-c(1,2)]
+
+
+  validate_pre_one_week <- predict(fit.train_one_week, type='response',as.data.frame(df.validate_scaled))
+  validate_roc_one_week <- roc(one_week_df_test$one_week, validate_pre_one_week)
+  roc_vec_one_week[i] <- as.numeric(validate_roc_one_week$auc)
+  
+  validate_pre_two_week <- predict(fit.train_two_week, type='response',as.data.frame(df.validate_scaled))
+  validate_roc_two_week <- roc(two_week_df_test$two_week, validate_pre_two_week)
+  roc_vec_two_week[i] <- as.numeric(validate_roc_two_week$auc)
+  
+  validate_pre_one_month <- predict(fit.train_one_mon, type='response',as.data.frame(df.validate_scaled))
+  validate_roc_one_month <- roc(one_month_df_test$one_mon, validate_pre_one_month)
+  roc_vec_one_mon[i] <- as.numeric(validate_roc_one_month$auc)
+  
+  print(i)
+}
+
+
+## Pick model
+
+print(paste0(which.max(roc_vec_one_week),"th", " ROC: ",max(roc_vec_one_week)))
+print(paste0(which.max(roc_vec_two_week),"th", " ROC: ",max(roc_vec_two_week)))
+print(paste0(which.max(roc_vec_one_mon),"th", " ROC: ",max(roc_vec_one_mon)))
+
+
+
+
+
+## Final prediction
+
+
+
+
+final_data <- scale(one_hotted_df)
+final_data <- as.data.frame(cbind(y_labels, final_data))
+
+
+### 1 Week
+
+# 1w
+final_data <- final_data[, col_names_1]
+
+final_data_one_week <- final_data[,-c(2,3)]
+
+validate_pre <- predict(model_one_week_1, type='response',final_data_one_week)
+validate_roc <- roc(final_data_one_week$one_week, validate_pre)
+plot(validate_roc, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+
+data_1w <- data.frame(ID = joint_data_f$item_id, WINDOW = "1w", TARGET = validate_pre) 
+data_1w <- data_1w %>% group_by(ID) %>% mutate(TARGET = mean(TARGET)) %>% arrange(ID)
+data_1w <- data_1w[!duplicated(data_1w$ID),]
+
+
+
+### 2 Week
+
+# 2w
+final_data <- scale(one_hotted_df)
+final_data <- as.data.frame(cbind(y_labels, final_data))
+final_data <- final_data[, col_names_4]
+
+final_data_two_week <- final_data[,-c(1,3)]
+
+validate_pre <- predict(model_two_week_4, type='response',final_data_two_week)
+validate_roc <- roc(final_data_two_week$two_week, validate_pre)
+plot(validate_roc, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+
+data_2w <- data.frame(ID = joint_data_f$item_id, WINDOW = "2w", TARGET = validate_pre)
+data_2w <- data_2w %>% group_by(ID) %>% mutate(TARGET = mean(TARGET))  %>% arrange(ID)
+data_2w <- data_2w[!duplicated(data_2w$ID),]
+
+
+### 1 Month
+
+# 1m
+final_data <- scale(one_hotted_df)
+final_data <- as.data.frame(cbind(y_labels, final_data))
+final_data <- final_data[, col_names_5]
+
+final_data_one_mon <- final_data[,-c(1,2)]
+
+validate_pre <- predict(model_one_mon_5, type='response',final_data_one_mon)
+validate_roc <- roc(final_data_one_mon$one_mon, validate_pre)
+plot(validate_roc, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+
+data_1m <- data.frame(ID = joint_data_f$item_id, WINDOW = "1m", TARGET = validate_pre)
+data_1m <- data_1m %>% group_by(ID) %>% mutate(TARGET = mean(TARGET))  %>% arrange(ID)
+data_1m <- data_1m[!duplicated(data_1m$ID),]
+
+
+
+### Final format
+
+##
+final_out_put <- rbind(data_1w, data_2w,data_1m)
+final_out_put <- as.data.frame(final_out_put)
+final_out_put <- final_out_put %>% arrange(ID)
+final_out_put
+#write.csv(final_out_put, file = "C:/Users/DESKTOP/Desktop/takehome/Result.csv")
